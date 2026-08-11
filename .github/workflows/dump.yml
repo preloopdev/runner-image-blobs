@@ -268,35 +268,17 @@ jobs:
                 var tags = [ tag ];
 
                 if(friendlyTag) {
-                  await refresh();
-                  resp = await fetch("https://ghcr.io/v2/${{ github.repository_owner }}/" + imageName + "/manifests/" + friendlyTag, { method: "GET", redirect: "manual", credentials: "include", headers: {
-                      "Accept": "application/vnd.docker.distribution.manifest.v2+json",
-                      "Authorization": "Bearer " + token
-                  } });
-
-                  if(resp.status < 200 || resp.status > 299 || process.env.FORCE_UPDATE === "true") {
-                  
-                      resp = await fetch("https://ghcr.io/v2/${{ github.repository_owner }}/" + imageName + "/manifests/" + friendlyTag, { method: "PUT", redirect: "manual", body: strmanifest, duplex: "half", credentials: "include", headers: {
-                          "Content-Type": "application/vnd.docker.distribution.manifest.v2+json",
-                          "Authorization": "Bearer " + token
-                      } });
-                      console.log(JSON.stringify(resp.status));
-                      if(resp.status < 200 || resp.status > 299) {
-                          throw new Error("manifest PUT failed for " + friendlyTag + ": " + resp.status + " " + await resp.text());
-                      }
-
-                      console.log("Move latest tag forward");
-                      resp = await fetch("https://ghcr.io/v2/${{ github.repository_owner }}/" + imageName + "/manifests/" + latestTag, { method: "PUT", redirect: "manual", body: strmanifest, duplex: "half", credentials: "include", headers: {
-                          "Content-Type": "application/vnd.docker.distribution.manifest.v2+json",
-                          "Authorization": "Bearer " + token
-                      } });
-                      console.log(JSON.stringify(resp.status));
-                      if(resp.status < 200 || resp.status > 299) {
-                          throw new Error("manifest PUT failed for " + latestTag + ": " + resp.status + " " + await resp.text());
-                      }
-
-                      tags.push(friendlyTag, latestTag);
-                  }
+                  // Floating tags (the ImageVersion-scoped friendly tag and
+                  // `latest`) are NOT moved here. They are only advanced by
+                  // the attest-and-sign job after the digest has passed the
+                  // vulnerability gate and been attested and signed — a
+                  // floating tag must never point at an image that has not
+                  // been vetted. Record the move it should make; the names
+                  // are only derivable here (ImageVersion/ImageOS live in the
+                  // runner environment).
+                  fs.appendFileSync("floating-${{ matrix.runner }}.txt",
+                    [imageName, friendlyTag, latestTag, tag].join("\t") + "\n");
+                  tags.push(friendlyTag, latestTag);
                 }
 
                 fs.appendFileSync("tags-${{ matrix.runner }}.txt", tags.map(t => ("ghcr.io/${{ github.repository_owner }}/" + imageName + ":" + t).toLowerCase()).join("\n") + "\n");
@@ -844,10 +826,15 @@ jobs:
       with:
         path: digests-${{ matrix.runner }}.txt
         name: digests-${{ matrix.runner }}
+    - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+      if: always()
+      with:
+        path: floating-${{ matrix.runner }}.txt
+        name: floating-${{ matrix.runner }}
   upload-manifests:
     runs-on: ubuntu-latest
     if: (!cancelled())
-    needs: dump
+    needs: [dump, attest-and-sign]
     permissions:
       packages: write
       contents: read
@@ -893,6 +880,12 @@ jobs:
         path: digests
         pattern: digests-*
         merge-multiple: true
+    - name: Download Floating Tag Moves
+      uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+      with:
+        path: floating
+        pattern: floating-*
+        merge-multiple: true
     - name: Docker Login
       run: docker login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
     - name: Install cosign
@@ -932,6 +925,30 @@ jobs:
             --certificate-oidc-issuer https://token.actions.githubusercontent.com
           echo "OK $ref"
         done
+    # Only after every digest passed the gate and was attested/signed may the
+    # floating tags advance. The run-tag manifest (the exact attested bytes)
+    # is copied verbatim via the registry API — buildx imagetools would wrap
+    # the single-arch manifest in a manifest list and change its identity.
+    - name: Advance floating tags to vetted digests
+      run: |
+        set -euo pipefail
+        while IFS=$'\t' read -r image friendly latest runtag; do
+          [ -n "$image" ] || continue
+          echo "==> $image:{$friendly,$latest} <- $runtag"
+          TOKEN=$(curl -s -u "${{ github.actor }}:${{ github.token }}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${{ github.repository_owner }}/$image:pull,push" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          MANIFEST=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/${{ github.repository_owner }}/$image/manifests/$runtag")
+          for target in "$friendly" "$latest"; do
+            curl -s -o /dev/null -w "$target: %{http_code}\n" -X PUT \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/vnd.docker.distribution.manifest.v2+json" \
+              -d "$MANIFEST" \
+              "https://ghcr.io/v2/${{ github.repository_owner }}/$image/manifests/$target"
+          done
+        done < <(sort -u floating/*.txt)
 
 
 
