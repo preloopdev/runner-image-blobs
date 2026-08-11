@@ -254,6 +254,9 @@ jobs:
                     "Authorization": "Bearer " + token
                 } });
                 console.log(JSON.stringify(resp.status));
+                if(resp.status < 200 || resp.status > 299) {
+                    throw new Error("manifest PUT failed for " + tag + ": " + resp.status + " " + await resp.text());
+                }
 
                 var tags = [ tag ];
 
@@ -271,6 +274,9 @@ jobs:
                           "Authorization": "Bearer " + token
                       } });
                       console.log(JSON.stringify(resp.status));
+                      if(resp.status < 200 || resp.status > 299) {
+                          throw new Error("manifest PUT failed for " + friendlyTag + ": " + resp.status + " " + await resp.text());
+                      }
 
                       console.log("Move latest tag forward");
                       resp = await fetch("https://ghcr.io/v2/${{ github.repository_owner }}/" + imageName + "/manifests/" + latestTag, { method: "PUT", redirect: "manual", body: strmanifest, duplex: "half", credentials: "include", headers: {
@@ -278,6 +284,9 @@ jobs:
                           "Authorization": "Bearer " + token
                       } });
                       console.log(JSON.stringify(resp.status));
+                      if(resp.status < 200 || resp.status > 299) {
+                          throw new Error("manifest PUT failed for " + latestTag + ": " + resp.status + " " + await resp.text());
+                      }
 
                       tags.push(friendlyTag, latestTag);
                   }
