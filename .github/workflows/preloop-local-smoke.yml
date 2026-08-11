@@ -1,0 +1,14 @@
+name: preloop-local-smoke
+on:
+  push:
+    branches: [dev-container-ubuntu-minimal]
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - name: show guest facts
+        run: |
+          uname -m
+          head -2 /etc/os-release
+          df -h / | tail -1
+          nproc
