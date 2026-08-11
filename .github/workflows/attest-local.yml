@@ -22,6 +22,7 @@ jobs:
     - name: Discover dump run and download digests
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_HOST: github.com
       run: |
         set -euo pipefail
         RUN_ID="${{ inputs.run_id }}"
@@ -40,6 +41,7 @@ jobs:
     - name: Gate, attest, and sign every pushed digest
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GH_HOST: github.com
       run: |
         set -euo pipefail
         # sigstore's public-good log flakes; cosign has no retry flag.
