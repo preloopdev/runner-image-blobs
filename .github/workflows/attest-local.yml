@@ -25,6 +25,9 @@ jobs:
         GH_HOST: github.com
       run: |
         set -euo pipefail
+        # The local runner checks out from a snapshot remote; gh derives the
+        # GitHub host from the git remotes, so point origin at the real repo.
+        git remote set-url origin https://github.com/${{ github.repository }}.git
         RUN_ID="${{ inputs.run_id }}"
         if [ -z "$RUN_ID" ]; then
           RUN_ID=$(gh run list --workflow dump.yml --limit 5 --json databaseId,status \
