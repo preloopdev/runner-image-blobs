@@ -1,0 +1,107 @@
+name: attest-local
+on:
+  workflow_dispatch:
+    inputs:
+      run_id:
+        description: "Dump run id to attest (default: latest completed dump run)"
+        required: false
+        type: string
+  schedule:
+    - cron: "30 * * * *"
+jobs:
+  attest:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+    - name: Checkout
+      uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+    - name: Discover dump run and download digests
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        RUN_ID="${{ inputs.run_id }}"
+        if [ -z "$RUN_ID" ]; then
+          RUN_ID=$(gh run list --workflow dump.yml --limit 5 --json databaseId,status \
+            --jq '.[] | select(.status == "completed") | .databaseId' | head -1)
+        fi
+        [ -n "$RUN_ID" ] || { echo "no completed dump run to attest" >&2; exit 1; }
+        echo "Attesting dump run $RUN_ID"
+        gh run download "$RUN_ID" -n 'digests-*' -n 'floating-*' -n 'tags-*'
+        ls digests/ floating/ tags/ 2>/dev/null || true
+    - name: Docker Login
+      run: docker login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
+    - name: Install cosign
+      uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+    - name: Gate, attest, and sign every pushed digest
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        set -euo pipefail
+        # sigstore's public-good log flakes; cosign has no retry flag.
+        retry() { for i in 1 2 3 4 5; do "$@" && return 0; sleep $((i * 10)); done; return 1; }
+        gh --version
+        gh attestation --help >/dev/null 2>&1 || {
+          echo "this runner's gh lacks 'attestation attest'; update the runner image" >&2
+          exit 1
+        }
+        sort -u digests/*.txt | while read -r ref; do
+          [ -n "$ref" ] || continue
+          image="${ref%@*}"; digest="${ref#*@}"
+          echo "==> $ref"
+          # 1. Vulnerability gate on the exact digest: no consumable tag may
+          # point at an image that has not passed scanning.
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            ghcr.io/aquasecurity/trivy:latest image \
+            --severity HIGH,CRITICAL --exit-code 1 --no-progress "$ref"
+          # 2. GitHub-signed SLSA provenance, stored in GHCR.
+          gh attestation attest "$ref" \
+            --repo "$GITHUB_REPOSITORY" \
+            --predicate-type https://slsa.dev/provenance/v1
+          # 3. Sigstore keyless signature (Fulcio + Rekor transparency log).
+          retry cosign sign --yes --timeout 5m "$ref"
+          # 4. Self-verify: only signatures from this repo's attest-local
+          # workflow on the default branch are accepted.
+          retry cosign verify "$ref" \
+            --certificate-identity-regexp \
+              "^https://github.com/$GITHUB_REPOSITORY/.github/workflows/attest-local.yml@refs/heads/" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com
+          echo "OK $ref"
+        done
+    # Only after every digest passed the gate and was attested/signed may the
+    # floating tags advance. The run-tag manifest (the exact attested bytes)
+    # is copied verbatim via the registry API — buildx imagetools would wrap
+    # the single-arch manifest in a manifest list and change its identity.
+    - name: Advance floating tags to vetted digests
+      run: |
+        set -euo pipefail
+        while IFS=$'\t' read -r image friendly latest runtag; do
+          [ -n "$image" ] || continue
+          echo "==> $image:{$friendly,$latest} <- $runtag"
+          TOKEN=$(curl -s -u "${{ github.actor }}:${{ github.token }}" \
+            "https://ghcr.io/token?service=ghcr.io&scope=repository:${{ github.repository_owner }}/$image:pull,push" \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["token"])')
+          MANIFEST=$(curl -s -H "Authorization: Bearer $TOKEN" \
+            -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+            "https://ghcr.io/v2/${{ github.repository_owner }}/$image/manifests/$runtag")
+          for target in "$friendly" "$latest"; do
+            curl -s -o /dev/null -w "$target: %{http_code}\n" -X PUT \
+              -H "Authorization: Bearer $TOKEN" \
+              -H "Content-Type: application/vnd.docker.distribution.manifest.v2+json" \
+              -d "$MANIFEST" \
+              "https://ghcr.io/v2/${{ github.repository_owner }}/$image/manifests/$target"
+          done
+        done < <(sort -u floating/*.txt)
+    - name: Merge tags.txt
+      run: cat tags/*.txt > tags.txt
+    - name: Setup node
+      uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+      with:
+        node-version: 24
+    - run: npm ci
+    - name: Run Merge
+      run: node ./check-composite-up-to-date.mjs
