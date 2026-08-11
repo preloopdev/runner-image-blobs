@@ -14,6 +14,7 @@ jobs:
     permissions:
       packages: write
       contents: read
+      actions: read
       id-token: write
       attestations: write
     steps:
@@ -35,7 +36,8 @@ jobs:
         fi
         [ -n "$RUN_ID" ] || { echo "no completed dump run to attest" >&2; exit 1; }
         echo "Attesting dump run $RUN_ID"
-        gh run download "$RUN_ID" -n 'digests-*' -n 'floating-*' -n 'tags-*'
+        gh run download "$RUN_ID" -R "${{ github.repository }}" \
+          -n 'digests-*' -n 'floating-*' -n 'tags-*'
         ls digests/ floating/ tags/ 2>/dev/null || true
     - name: Docker Login
       run: docker login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
