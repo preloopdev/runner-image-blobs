@@ -36,8 +36,14 @@ jobs:
         fi
         [ -n "$RUN_ID" ] || { echo "no completed dump run to attest" >&2; exit 1; }
         echo "Attesting dump run $RUN_ID"
-        gh run download "$RUN_ID" -R "${{ github.repository }}" \
-          -n 'digests-*' -n 'floating-*' -n 'tags-*'
+        # gh matches artifact names exactly (no patterns), so enumerate the
+        # matrix artifact names per runner.
+        for runner in ubuntu-24.04 ubuntu-24.04-arm ubuntu-26.04 ubuntu-26.04-arm; do
+          for kind in digests floating tags; do
+            gh run download "$RUN_ID" -R "${{ github.repository }}" \
+              -n "$kind-$runner"
+          done
+        done
         ls digests/ floating/ tags/ 2>/dev/null || true
     - name: Docker Login
       run: docker login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
