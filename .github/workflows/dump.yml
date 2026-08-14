@@ -866,7 +866,10 @@ jobs:
   # jobs, gated on their success: a rejected push now fails the dump step
   # loudly, so the digests artifact only ever names images that exist.
   attest-and-sign:
-    runs-on: ubuntu-latest
+    # The hosted runner's 14 GiB disk cannot hold trivy's layer extraction
+    # of the hostedtoolcache image (~20 GiB). The self-hosted pool's VMs
+    # carry 80 GiB (PRELOOP_RUNNER_STORAGE_GB=80).
+    runs-on: [self-hosted, Linux, X64]
     needs: dump
     # One leg per dumped runner image: each leg pulls, scans, SBOMs, signs,
     # and attests only its own digests, so the small hosted-runner disk is

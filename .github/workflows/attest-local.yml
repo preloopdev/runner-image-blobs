@@ -10,7 +10,10 @@ on:
     - cron: "30 * * * *"
 jobs:
   attest:
-    runs-on: ubuntu-latest
+    # The hosted runner's 14 GiB disk cannot hold trivy's layer extraction
+    # of the hostedtoolcache image (~20 GiB). The self-hosted pool's VMs
+    # carry 80 GiB (PRELOOP_RUNNER_STORAGE_GB=80).
+    runs-on: [self-hosted, Linux, X64]
     permissions:
       packages: write
       contents: read
@@ -63,6 +66,8 @@ jobs:
         GH_HOST: github.com
       run: |
         set -euo pipefail
+        echo "runner disk: $(df -h / | awk 'NR==2 {print $2, "total,", $4, "free"}')"
+        docker info --format 'docker root: {{.DockerRootDir}}' 2>/dev/null || true
         # sigstore's public-good log flakes; cosign has no retry flag.
         retry() { for i in 1 2 3 4 5; do "$@" && return 0; sleep $((i * 10)); done; return 1; }
         sort -u digests-*.txt | while read -r ref; do
