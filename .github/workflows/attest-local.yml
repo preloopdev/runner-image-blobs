@@ -52,6 +52,11 @@ jobs:
       run: docker login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
     - name: Install cosign
       uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+      with:
+        # cosign 3.x pushes attestations as a self-incompatible bundle-index
+        # (its own next sign/attest call cannot decode it). Pin the 2.x
+        # tag-schema format, which the provenance capture also understands.
+        cosign-release: v2.6.0
     - name: Gate, attest, and sign every pushed digest
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
