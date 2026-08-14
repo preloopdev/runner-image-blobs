@@ -941,19 +941,19 @@ jobs:
           # shipped by the GitHub CLI, and attest-build-provenance only runs
           # as a per-subject action step, so cosign attaches it.
           cat > slsa.json <<EOF
-{
-  "builder": { "id": "https://github.com/$GITHUB_REPOSITORY/.github/workflows/dump.yml@refs/heads/" },
-  "buildType": "https://github.com/preloopdev/runner-image-blobs/dump@v1",
-  "invocation": {
-    "configSource": {
-      "uri": "git+https://github.com/$GITHUB_REPOSITORY.git",
-      "digest": { "sha1": "$GITHUB_SHA" },
-      "entryPoint": "dump.yml"
-    }
-  },
-  "metadata": { "buildInvocationId": "$GITHUB_RUN_ID" }
-}
-EOF
+          {
+            "builder": { "id": "https://github.com/$GITHUB_REPOSITORY/.github/workflows/dump.yml@refs/heads/" },
+            "buildType": "https://github.com/preloopdev/runner-image-blobs/dump@v1",
+            "invocation": {
+              "configSource": {
+                "uri": "git+https://github.com/$GITHUB_REPOSITORY.git",
+                "digest": { "sha1": "$GITHUB_SHA" },
+                "entryPoint": "dump.yml"
+              }
+            },
+            "metadata": { "buildInvocationId": "$GITHUB_RUN_ID" }
+          }
+          EOF
           retry cosign attest --type slsaprovenance --predicate slsa.json --yes "$ref"
           rm -f slsa.json
           # 4. Sigstore keyless signature (Fulcio + Rekor transparency log).
