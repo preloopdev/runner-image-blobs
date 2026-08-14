@@ -10,10 +10,11 @@ on:
     - cron: "30 * * * *"
 jobs:
   attest:
-    # The hosted runner's 14 GiB disk cannot hold trivy's layer extraction
-    # of the hostedtoolcache image (~20 GiB). The self-hosted pool's VMs
-    # carry 80 GiB (PRELOOP_RUNNER_STORAGE_GB=80).
-    runs-on: [self-hosted, Linux, X64]
+    # NOTE: trivy's layer extraction of the hostedtoolcache image needs
+    # ~20 GiB, beyond the hosted runner's 14 GiB. Until a larger runner is
+    # registered to this fork, the gate fails on that image (the preloopdev
+    # release pipeline runs the gate on an 80 GiB host instead).
+    runs-on: ubuntu-latest
     permissions:
       packages: write
       contents: read
