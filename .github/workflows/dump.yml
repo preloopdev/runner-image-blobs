@@ -923,14 +923,14 @@ jobs:
           # attestation, keyless signature, and SPDX SBOM attached below.
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             ghcr.io/aquasecurity/trivy:latest image \
-            --severity HIGH,CRITICAL --exit-code 0 --no-progress "$ref"
+            --severity HIGH,CRITICAL --exit-code 0 --no-progress --timeout 30m --parallel 2 "$ref"
           # 2. SPDX SBOM generated from the scanned layers and attached as a
           # signed in-toto attestation so golden builds can bind it. `trivy
           # sbom` scans *existing* SBOM files; the image subcommand emits the
           # SPDX document from the (pulled) image.
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
             -v "$PWD:/out" ghcr.io/aquasecurity/trivy:latest image \
-            --format spdx-json --no-progress \
+            --format spdx-json --no-progress --timeout 30m --parallel 2 \
             --output /out/sbom.json "$ref"
           # 2. GitHub-signed SLSA provenance, stored in GHCR.
           gh attestation attest "$ref" \
