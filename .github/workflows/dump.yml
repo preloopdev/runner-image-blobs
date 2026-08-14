@@ -893,29 +893,6 @@ jobs:
       run: docker login -u ${{ github.actor }} -p ${{ github.token }} ghcr.io
     - name: Install cosign
       uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
-    - name: Install gh with attestation support
-      run: |
-        set -euo pipefail
-        if gh attestation attest --help >/dev/null 2>&1; then
-          echo "runner gh supports 'attestation attest'"
-          exit 0
-        fi
-        # The hosted runner image's gh (2.97) dropped the `attest` command;
-        # pin a release that still ships it. GHCR attestations must be
-        # created by the GitHub CLI.
-        case "$(uname -m)" in
-          x86_64) ARCH=linux_amd64 ;;
-          aarch64|arm64) ARCH=linux_arm64 ;;
-          *) echo "unsupported arch: $(uname -m)" >&2; exit 1 ;;
-        esac
-        VER=2.96.0
-        curl -fsSL "https://github.com/cli/cli/releases/download/v${VER}/gh_${VER}_${ARCH}.tar.gz" \
-          -o /tmp/gh.tgz
-        tar -xzf /tmp/gh.tgz -C /tmp
-        mkdir -p "$HOME/.local/bin"
-        cp "/tmp/gh_${VER}_${ARCH}/bin/gh" "$HOME/.local/bin/gh"
-        "$HOME/.local/bin/gh" attestation attest --help >/dev/null
-        echo "$HOME/.local/bin" >> "$GITHUB_PATH"
     - name: Gate, attest, and sign every pushed digest
       env:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -923,11 +900,6 @@ jobs:
         set -euo pipefail
         # sigstore's public-good log flakes; cosign has no retry flag.
         retry() { for i in 1 2 3 4 5; do "$@" && return 0; sleep $((i * 10)); done; return 1; }
-        gh --version
-        gh attestation --help >/dev/null 2>&1 || {
-          echo "this runner's gh lacks 'attestation attest'; update the runner image" >&2
-          exit 1
-        }
         sort -u digests/*.txt | while read -r ref; do
           [ -n "$ref" ] || continue
           image="${ref%@*}"; digest="${ref#*@}"
@@ -962,15 +934,33 @@ jobs:
             -v "$PWD:/out" ghcr.io/aquasecurity/trivy:latest image \
             --format spdx-json --no-progress --timeout 30m --parallel 2 \
             --output /out/sbom.json "$ref"
-          # 2. GitHub-signed SLSA provenance, stored in GHCR.
-          gh attestation attest "$ref" \
-            --repo "$GITHUB_REPOSITORY" \
-            --predicate-type https://slsa.dev/provenance/v1
-          # 3. Sigstore keyless signature (Fulcio + Rekor transparency log).
+          # 3. SLSA provenance, attached as a signed in-toto attestation.
+          # The keyless certificate's OIDC identity is this workflow, so the
+          # provenance is GitHub-Actions-signed (Fulcio + Rekor), stored as
+          # an OCI referrer in GHCR. `gh attestation attest` is no longer
+          # shipped by the GitHub CLI, and attest-build-provenance only runs
+          # as a per-subject action step, so cosign attaches it.
+          cat > slsa.json <<EOF
+{
+  "builder": { "id": "https://github.com/$GITHUB_REPOSITORY/.github/workflows/dump.yml@refs/heads/" },
+  "buildType": "https://github.com/preloopdev/runner-image-blobs/dump@v1",
+  "invocation": {
+    "configSource": {
+      "uri": "git+https://github.com/$GITHUB_REPOSITORY.git",
+      "digest": { "sha1": "$GITHUB_SHA" },
+      "entryPoint": "dump.yml"
+    }
+  },
+  "metadata": { "buildInvocationId": "$GITHUB_RUN_ID" }
+}
+EOF
+          retry cosign attest --type slsaprovenance --predicate slsa.json --yes "$ref"
+          rm -f slsa.json
+          # 4. Sigstore keyless signature (Fulcio + Rekor transparency log).
           retry cosign sign --yes --timeout 5m "$ref"
-          # 4. Signed SPDX SBOM attestation.
+          # 5. Signed SPDX SBOM attestation.
           retry cosign attest --type spdx --predicate sbom.json --yes "$ref"
-          # 5. Self-verify: only signatures from this repo's dump workflow
+          # 6. Self-verify: only signatures from this repo's dump workflow
           # on the default branch are accepted.
           retry cosign verify "$ref" \
             --certificate-identity-regexp \
