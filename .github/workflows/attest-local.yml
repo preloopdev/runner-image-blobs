@@ -97,10 +97,12 @@ jobs:
             ghcr.io/aquasecurity/trivy:latest image \
             --severity HIGH,CRITICAL --exit-code 0 --no-progress "$ref"
           # 2. SPDX SBOM generated from the scanned layers and attached as a
-          # signed in-toto attestation so golden builds can bind it.
+          # signed in-toto attestation so golden builds can bind it. `trivy
+          # sbom` scans *existing* SBOM files; the image subcommand emits the
+          # SPDX document from the (pulled) image.
           docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
-            -v "$PWD:/out" ghcr.io/aquasecurity/trivy:latest sbom \
-            --format spdx-json --scanners vuln --no-progress \
+            -v "$PWD:/out" ghcr.io/aquasecurity/trivy:latest image \
+            --format spdx-json --no-progress \
             --output /out/sbom.json "$ref"
           # 3. GitHub-signed SLSA provenance, stored in GHCR.
           gh attestation attest "$ref" \
